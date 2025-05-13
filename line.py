@@ -1,7 +1,7 @@
 from PIL import Image
 
 # Create a new image (e.g., 100x100 pixels, RGB mode, black background)
-img = Image.new('RGB', (100, 100), color='black')
+img = Image.new('RGB', (1000, 500), color='black')
 
 # Access pixel data
 pixels = img.load()
