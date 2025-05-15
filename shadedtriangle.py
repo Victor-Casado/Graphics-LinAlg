@@ -95,5 +95,5 @@ def DrawShadedTriangle (P0, P1, P2, color):
             pixels[x,y] = newcolor
 
 
-DrawShadedTriangle([150,150, 0], [200,500, 1], [800, 200, .5], (0, 255, 255))
+DrawShadedTriangle([150,150, 0], [200,500, 1], [800, 200, .7], (0, 255, 0))
 img.show()
