@@ -1,50 +1,24 @@
-'''
-Need to make models return list of homogenous coordinates (4 element vectors)
-And make them return list of [a,b,c], where a,b,c are indices of homogenous coordinates list
-Those indices are the triangles in the models
-Also need to make functions that return 4x4 rotation, scaling, and translation matrices
-Thus, can at beginning, per model make list of transformed points
-If they move need to retransform per frame
-Per frame make a transformation matrix for the camera (movable by player?)
-Constant projection matrix
-So each frame (or at beginning if static):
-    matrix for camera
-    Per model:
-        list of transformed points
-            if static model, this is stored in memory
-            
-        list of points * matrix for camera * projection matrix -> display
-'''
-
-
 from PIL import Image
 import math
 import random
 
 # Constants
-Cw, Ch = 500, 500       # Canvas width and height (pixels)
-Vw, Vh = 2.0, 2.0         # Viewport width and height (scene units)
-d = 1.0                  # Distance from camera to projection plane
+Cw, Ch = 500, 500  # Canvas width and height
+Vw, Vh = 2.0, 2.0  # Viewport width and height
+d = 1.0            # Distance from camera to projection plane
 
 # Colors
-BLUE = (0, 0, 255)
-RED = (255, 0, 0)
-GREEN = (0, 255, 0)
-CYAN = (0, 255, 255)
-MAGENTA = (255, 0, 255)
-YELLOW = (255, 255, 0)
-ORANGE = (255, 165, 0)
-PURPLE = (128, 0, 128)
-PINK = (255, 105, 180)
-WHITE = (255, 255, 255)
-GRAY = (128, 128, 128)
-BROWN = (139, 69, 19)
+COLORS = [
+    (0, 0, 255), (255, 0, 0), (0, 255, 0), (0, 255, 255),
+    (255, 0, 255), (255, 255, 0), (255, 165, 0), (128, 0, 128),
+    (255, 105, 180), (255, 255, 255), (128, 128, 128), (139, 69, 19)
+]
 
-COLORS = [BLUE, RED, GREEN, CYAN, MAGENTA, YELLOW, ORANGE, PURPLE, PINK, WHITE, GRAY, BROWN]
-
-# Create a new image (1000x500 pixels, RGB mode, black background)
-img = Image.new('RGB', (500, 500), color='black')
+# Create a new image
+img = Image.new('RGB', (Cw, Ch), color='black')
 pixels = img.load()
+
+# Useful
 
 def Interpolate(i0, d0, i1, d1):
     if i0 == i1:
@@ -54,128 +28,191 @@ def Interpolate(i0, d0, i1, d1):
     d = d0
     for i in range(i1 - i0):
         values.append(d)
-        d = d + a
+        d += a
     return values
-
 
 def DrawLine(P0, P1, color):
     x0, y0 = P0
     x1, y1 = P1
-
     if abs(x1 - x0) > abs(y1 - y0):
-        # Line is horizontal-ish
         if x0 > x1:
             x0, y0, x1, y1 = x1, y1, x0, y0
-
         ys = Interpolate(x0, y0, x1, y1)
         for x in range(x0, x1):
             y = int(ys[x - x0])
-            if 0 <= x < img.width and 0 <= y < img.height:
+            if 0 <= x < Cw and 0 <= y < Ch:
                 pixels[x, y] = color
     else:
-        # Line is vertical-ish
         if y0 > y1:
             x0, y0, x1, y1 = x1, y1, x0, y0
-
         xs = Interpolate(y0, x0, y1, x1)
         for y in range(y0, y1):
             x = int(xs[y - y0])
-            if 0 <= x < img.width and 0 <= y < img.height:
+            if 0 <= x < Cw and 0 <= y < Ch:
                 pixels[x, y] = color
 
+def DrawTriangle(P0, P1, P2, color):
+    DrawLine(P0, P1, color)
+    DrawLine(P1, P2, color)
+    DrawLine(P2, P0, color)
+
 def ProjectVertex(v):
-    x, y, z = v
-    canvasX = int((x * d / z * Cw / Vw) + Cw / 2) # +Cw/2 and +Ch/2 are because of PIL meaning (0,0) is top-left. this centers 0,0
-    canvasY = int((-y * d / z * Ch / Vh) + Ch / 2) #negative because PIL flips y access
+    x, y, z, w = v
+    x /= w
+    y /= w
+    z /= w
+    canvasX = int((x * d / z * Cw / Vw) + Cw / 2)
+    canvasY = int((-y * d / z * Ch / Vh) + Ch / 2)
     return (canvasX, canvasY)
 
+# Matrices
 
-def DrawTriangle (P0, P1, P2, color) :
-    DrawLine(P0, P1, color);
-    DrawLine(P1, P2, color);
-    DrawLine(P2, P0, color);
+def identity_matrix():
+    return [
+        [1,0,0,0],
+        [0,1,0,0],
+        [0,0,1,0],
+        [0,0,0,1],
+    ]
 
-def cube(centerPoint):
-    cx,cy,cz = centerPoint
+def translation_matrix(tx, ty, tz):
+    return [
+        [1,0,0,tx],
+        [0,1,0,ty],
+        [0,0,1,tz],
+        [0,0,0,1]
+    ]
 
-     # The four "front" vertices (z = near face)
-    vAf = [cx - 1, cy - 1, cz - 1]
-    vBf = [cx - 1, cy + 1, cz - 1]
-    vCf = [cx + 1, cy + 1, cz - 1]
-    vDf = [cx + 1, cy - 1, cz - 1]
+def scaling_matrix(sx, sy, sz):
+    return [
+        [sx,0,0,0],
+        [0,sy,0,0],
+        [0,0,sz,0],
+        [0,0,0,1]
+    ]
 
-    # The four "back" vertices (z = far face)
-    vAb = [cx - 1, cy - 1, cz + 1]
-    vBb = [cx - 1, cy + 1, cz + 1]
-    vCb = [cx + 1, cy + 1, cz + 1]
-    vDb = [cx + 1, cy - 1, cz + 1]
+def rotation_x_matrix(theta):
+    c = math.cos(theta)
+    s = math.sin(theta)
+    return [
+        [1,0,0,0],
+        [0,c,-s,0],
+        [0,s,c,0],
+        [0,0,0,1]
+    ]
 
-    # Front face (Blue)
-    DrawTriangle(ProjectVertex(vAf), ProjectVertex(vBf), ProjectVertex(vCf), BLUE)
-    DrawTriangle(ProjectVertex(vAf), ProjectVertex(vCf), ProjectVertex(vDf), RED)
+def rotation_y_matrix(theta):
+    c = math.cos(theta)
+    s = math.sin(theta)
+    return [
+        [c,0,s,0],
+        [0,1,0,0],
+        [-s,0,c,0],
+        [0,0,0,1]
+    ]
 
-    # Back face (Red)
-    DrawTriangle(ProjectVertex(vAb), ProjectVertex(vBb), ProjectVertex(vCb), MAGENTA)
-    DrawTriangle(ProjectVertex(vAb), ProjectVertex(vCb), ProjectVertex(vDb), GREEN)
+def rotation_z_matrix(theta):
+    c = math.cos(theta)
+    s = math.sin(theta)
+    return [
+        [c,-s,0,0],
+        [s,c,0,0],
+        [0,0,1,0],
+        [0,0,0,1]
+    ]
 
-    # Top face
-    DrawTriangle(ProjectVertex(vBf), ProjectVertex(vBb), ProjectVertex(vCb), CYAN)
-    DrawTriangle(ProjectVertex(vBf), ProjectVertex(vCb), ProjectVertex(vCf), YELLOW)
+def matrix_multiply(a, b):
+    result = [[0]*4 for _ in range(4)]
+    for i in range(4):
+        for j in range(4):
+            for k in range(4):
+                result[i][j] += a[i][k] * b[k][j]
+    return result
 
-    # Bottom face
-    DrawTriangle(ProjectVertex(vAf), ProjectVertex(vAb), ProjectVertex(vDb), ORANGE)
-    DrawTriangle(ProjectVertex(vAf), ProjectVertex(vDb), ProjectVertex(vDf), PURPLE)
+def transform_point(m, p):
+    return [
+        sum(m[i][j] * p[j] for j in range(4))
+        for i in range(4)
+    ]
 
-    # Left face
-    DrawTriangle(ProjectVertex(vAf), ProjectVertex(vAb), ProjectVertex(vBb), PINK)
-    DrawTriangle(ProjectVertex(vAf), ProjectVertex(vBb), ProjectVertex(vBf), WHITE)
+# Models
 
-    # Right face
-    DrawTriangle(ProjectVertex(vDf), ProjectVertex(vDb), ProjectVertex(vCb), GRAY)
-    DrawTriangle(ProjectVertex(vDf), ProjectVertex(vCb), ProjectVertex(vCf), BROWN)
+def cube():
+    vertices = [
+        [-1,-1,-1,1], [-1,1,-1,1], [1,1,-1,1], [1,-1,-1,1],
+        [-1,-1,1,1], [-1,1,1,1], [1,1,1,1], [1,-1,1,1],
+    ]
+    triangles = [
+        [0,1,2], [0,2,3], [4,5,6], [4,6,7],
+        [1,5,6], [1,6,2], [0,4,7], [0,7,3],
+        [0,1,5], [0,5,4], [3,2,6], [3,6,7],
+    ]
+    return vertices, triangles
 
-
-def generate_sphere_vertices(center, radius, stackCount, sectorCount):
-    cx, cy, cz = center
+def sphere(radius=1.0, stack_count=8, sector_count=8):
     vertices = []
+    triangles = []
 
-    for i in range(stackCount + 1):
-        stack_angle = math.pi / 2 - i * math.pi / stackCount  # from pi/2 to -pi/2
-        xy = radius * math.cos(stack_angle)                  # radius of current stack circle
+    for i in range(stack_count + 1):
+        stack_angle = math.pi / 2 - i * math.pi / stack_count
+        xy = radius * math.cos(stack_angle)
         z = radius * math.sin(stack_angle)
 
-        for j in range(sectorCount + 1):
-            sector_angle = j * 2 * math.pi / sectorCount    # 0 to 2pi
+        for j in range(sector_count + 1):
+            sector_angle = j * 2 * math.pi / sector_count
             x = xy * math.cos(sector_angle)
             y = xy * math.sin(sector_angle)
-            vertices.append([cx + x, cy + y, cz + z])
+            vertices.append([x, y, z, 1])
 
-    return vertices
+    for i in range(stack_count):
+        k1 = i * (sector_count + 1)
+        k2 = k1 + sector_count + 1
 
-def draw_sphere(center, radius=1, stackCount=8, sectorCount=8):
-    vertices = generate_sphere_vertices(center, radius, stackCount, sectorCount)
-
-    for i in range(stackCount):
-        k1 = i * (sectorCount + 1)        # current stack start index
-        k2 = k1 + sectorCount + 1         # next stack start index
-
-        for j in range(sectorCount):
-            # skip first stack for first triangle
+        for j in range(sector_count):
             if i != 0:
-                v1 = vertices[k1]
-                v2 = vertices[k2]
-                v3 = vertices[k1 + 1]
-                DrawTriangle(ProjectVertex(v1), ProjectVertex(v2), ProjectVertex(v3), random.choice(COLORS[1:6]))
+                triangles.append([k1 + j, k2 + j, k1 + j + 1])
+            if i != (stack_count - 1):
+                triangles.append([k1 + j + 1, k2 + j, k2 + j + 1])
 
-            # skip last stack for second triangle
-            if i != (stackCount - 1):
-                v1 = vertices[k1 + 1]
-                v2 = vertices[k2]
-                v3 = vertices[k2 + 1]
-                DrawTriangle(ProjectVertex(v1), ProjectVertex(v2), ProjectVertex(v3), random.choice(COLORS[1:6]))
+    return vertices, triangles
 
-            k1 += 1
-            k2 += 1
+# Render
 
+def render_model(vertices, triangles, model_matrix, view_matrix):
+    m = matrix_multiply(view_matrix, model_matrix)
+    transformed = [transform_point(m, v) for v in vertices]
+
+    for tri in triangles:
+        p0 = ProjectVertex(transformed[tri[0]])
+        p1 = ProjectVertex(transformed[tri[1]])
+        p2 = ProjectVertex(transformed[tri[2]])
+        DrawTriangle(p0, p1, p2, random.choice(COLORS))
+
+def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0)):
+    sx, sy, sz = scale
+    rx, ry, rz = rotation
+    rx *= math.pi/180
+    ry *= math.pi/180
+    rz *= math.pi/180
+    tx, ty, tz = translation
+
+    S = scaling_matrix(sx, sy, sz)
+    Rx = rotation_x_matrix(rx)
+    Ry = rotation_y_matrix(ry)
+    Rz = rotation_z_matrix(rz)
+    T = translation_matrix(tx, ty, tz)
+
+    model_matrix = matrix_multiply(T, matrix_multiply(Rz, matrix_multiply(Ry, matrix_multiply(Rx, S))))
+    view_matrix = identity_matrix()
+
+    vertices, triangles = model_fn()
+    render_model(vertices, triangles, model_matrix, view_matrix)
+
+# Display
+
+display_model(cube, scale=(1,1,1), rotation=(30, 0, 0), translation=(0, 0, 5))
+display_model(sphere, scale=(0.6,0.6,0.6), translation=(-2, 0, 6))
+display_model(sphere, scale=(0.6,0.6,0.6), translation=(2, 0, 6))
+display_model(cube, rotation=(45,60,0), translation = (-2,4,7))
 
 img.show()
