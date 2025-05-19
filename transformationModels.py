@@ -188,7 +188,7 @@ def render_model(vertices, triangles, model_matrix, view_matrix):
         p2 = ProjectVertex(transformed[tri[2]])
         DrawTriangle(p0, p1, p2, random.choice(COLORS))
 
-def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0)):
+def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0), cameraRotation=(0,0,0), cameraTranslation=(0,0,0)):
     sx, sy, sz = scale
     rx, ry, rz = rotation
     rx *= math.pi/180
@@ -203,7 +203,19 @@ def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0)
     T = translation_matrix(tx, ty, tz)
 
     model_matrix = matrix_multiply(T, matrix_multiply(Rz, matrix_multiply(Ry, matrix_multiply(Rx, S))))
-    view_matrix = identity_matrix()
+
+    crx, cry, crz = cameraRotation
+    crx *= math.pi/180
+    cry *= math.pi/180
+    crz *= math.pi/180
+    ctx, cty, ctz = cameraTranslation
+
+    cRx = rotation_x_matrix(crx)
+    cRy = rotation_y_matrix(cry)
+    cRz = rotation_z_matrix(crz)
+    cT = translation_matrix(ctx, cty, ctz)
+
+    model_matrix = matrix_multiply(cT, matrix_multiply(cRz, matrix_multiply(cRy, cRx)))
 
     vertices, triangles = model_fn()
     render_model(vertices, triangles, model_matrix, view_matrix)
