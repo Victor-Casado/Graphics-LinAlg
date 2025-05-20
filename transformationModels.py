@@ -237,6 +237,9 @@ def render_model(vertices, triangles, model_matrix, view_matrix, center):
         if math.dist(v, center) > largestRad:
             largestRad = math.dist(v, center)
 
+
+
+            #Culling
     culled = cull_model(center, largestRad)
     #print(culled)
     if culled == "Partially Inside":
@@ -262,7 +265,7 @@ def render_model(vertices, triangles, model_matrix, view_matrix, center):
                 index -= 1
             else:
                 if culled0 or culled1 or culled2:
-                    
+
             #print("new triangle\n")
 
     else:
@@ -315,7 +318,10 @@ def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0)
 def signed_distance_to_plane(plane, point):
     A, B, C, D = plane
     x, y, z, w = point
-    return A*x + B*y + C*z + D
+    dist = A*x + B*y + C*z + D
+    if math.isclose(0, dist): #floating point
+        return 0
+    return dist
 
 def cull_model(center, radius):
     for plane in planes:
@@ -325,7 +331,7 @@ def cull_model(center, radius):
             if (sign > 0 and distance < 0) or (sign < 0 and distance > 0):
                 return True
         else:
-            if radius != 0:
+            if radius != 0: #because of reutilization for points
                 return "Partially Inside"
     return False
 
