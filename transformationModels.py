@@ -6,7 +6,8 @@ import random
 Cw, Ch = 500, 500  # Canvas width and height
 Vw, Vh = 2.0, 2.0  # Viewport width and height
 d = 1.0            # Distance from camera to projection plane
-
+maxDist = 1000 # Distance at which stuff is no longer rendered
+minDist = 0
 # Colors
 COLORS = [
     (0, 0, 255), (255, 0, 0), (0, 255, 0), (0, 255, 255),
@@ -19,6 +20,54 @@ img = Image.new('RGB', (Cw, Ch), color='black')
 pixels = img.load()
 
 # Useful
+
+def compute_frustum_planes():
+    # Viewport half-dimensions
+    hw = Vw / 2
+    hh = Vh / 2
+
+    # Viewport corners
+    top_left     = (-hw,  hh, d)
+    top_right    = ( hw,  hh, d)
+    bottom_left  = (-hw, -hh, d)
+    bottom_right = ( hw, -hh, d)
+
+    origin = (0, 0, 0)
+
+    # Planes: all normals should point *inward* (into frustum)
+    near_plane  = (0, 0, -1, 0)  # z = 0
+    far_plane   = (0, 0, 1, -maxDist)
+
+    left_plane   = plane_from_points(origin, bottom_left, bottom_right)
+    right_plane  = plane_from_points(origin, top_right, bottom_right)
+    top_plane    = plane_from_points(origin, top_right, top_left)
+    bottom_plane = plane_from_points(origin, top_left, bottom_left)
+
+    return [near_plane, far_plane, left_plane, right_plane, top_plane, bottom_plane]
+
+
+
+def cross(u, v):
+    return [
+        u[1]*v[2] - u[2]*v[1],
+        u[2]*v[0] - u[0]*v[2],
+        u[0]*v[1] - u[1]*v[0]
+    ]
+
+def normalize(v):
+    mag = sum(c**2 for c in v) ** 0.5
+    return [c / mag for c in v]
+
+def plane_from_points(p1, p2, p3):
+    # Two vectors on the plane
+    v1 = [p2[i] - p1[i] for i in range(3)]
+    v2 = [p3[i] - p1[i] for i in range(3)]
+
+    normal = normalize(cross(v1, v2))
+    A, B, C = normal
+    D = -(A*p1[0] + B*p1[1] + C*p1[2])
+    return (A, B, C, D)
+
 
 def Interpolate(i0, d0, i1, d1):
     if i0 == i1:
@@ -178,9 +227,47 @@ def sphere(radius=1.0, stack_count=8, sector_count=8):
 
 # Render
 
-def render_model(vertices, triangles, model_matrix, view_matrix):
+def render_model(vertices, triangles, model_matrix, view_matrix, center):
+    #print(center)
     m = matrix_multiply(view_matrix, model_matrix)
     transformed = [transform_point(m, v) for v in vertices]
+
+    largestRad = 0
+    for v in transformed:
+        if math.dist(v, center) > largestRad:
+            largestRad = math.dist(v, center)
+
+    culled = cull_model(center, largestRad)
+    #print(culled)
+    if culled == "Partially Inside":
+        index = 0
+        #print(triangles)
+        for index in range(len(triangles)):
+            #print(index)
+            if index >= len(triangles):
+                break
+
+            #print("(" + str(transformed[triangles[index][0]][0]) + "," + str(transformed[triangles[index][0]][1]) + "," + str(transformed[triangles[index][0]][2]) + ")")
+            culled0 = cull_model(transformed[triangles[index][0]], 0)
+
+            #print("(" + str(transformed[triangles[index][1]][0]) + "," + str(transformed[triangles[index][1]][1]) + "," + str(transformed[triangles[index][1]][2]) + ")")
+            culled1 = cull_model(transformed[triangles[index][1]], 0)
+
+            #print("(" + str(transformed[triangles[index][2]][0]) + "," + str(transformed[triangles[index][2]][1]) + "," + str(transformed[triangles[index][2]][2]) + ")")
+            culled2 = cull_model(transformed[triangles[index][2]], 0)
+
+            if culled0 and culled1 and culled2:
+                #print("outside")
+                triangles.pop(index)
+                index -= 1
+            else:
+                if culled0 or culled1 or culled2:
+                    
+            #print("new triangle\n")
+
+    else:
+        if culled:
+            return False
 
     for tri in triangles:
         p0 = ProjectVertex(transformed[tri[0]])
@@ -215,14 +302,37 @@ def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0)
     cRz = rotation_z_matrix(crz)
     cT = translation_matrix(ctx, cty, ctz)
 
-    model_matrix = matrix_multiply(cT, matrix_multiply(cRz, matrix_multiply(cRy, cRx)))
+    view_matrix = matrix_multiply(cT, matrix_multiply(cRz, matrix_multiply(cRy, cRx)))
 
     vertices, triangles = model_fn()
-    render_model(vertices, triangles, model_matrix, view_matrix)
+
+    center = (translation[0] - cameraTranslation[0], translation[1] - cameraTranslation[1], translation[2] - cameraTranslation[2], 1)
+    #print(center)
+    render_model(vertices, triangles, model_matrix, view_matrix, center)
+
+# Culling
+
+def signed_distance_to_plane(plane, point):
+    A, B, C, D = plane
+    x, y, z, w = point
+    return A*x + B*y + C*z + D
+
+def cull_model(center, radius):
+    for plane in planes:
+        distance = signed_distance_to_plane(plane, center)
+        sign = signed_distance_to_plane(plane, (0,0,1,1))
+        if not abs(distance) < radius:
+            if (sign > 0 and distance < 0) or (sign < 0 and distance > 0):
+                return True
+        else:
+            if radius != 0:
+                return "Partially Inside"
+    return False
 
 # Display
+planes = compute_frustum_planes()
 
-display_model(cube, scale=(1,1,1), rotation=(30, 0, 0), translation=(0, 0, 5))
+display_model(cube, scale=(1,1,1), rotation=(30, 0, 0), translation=(5, 0, 5))
 display_model(sphere, scale=(0.6,0.6,0.6), translation=(-2, 0, 6))
 display_model(sphere, scale=(0.6,0.6,0.6), translation=(2, 0, 6))
 display_model(cube, rotation=(45,60,0), translation = (-2,4,7))
