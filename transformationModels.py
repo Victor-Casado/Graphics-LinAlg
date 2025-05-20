@@ -265,9 +265,8 @@ def render_model(vertices, triangles, model_matrix, view_matrix, center):
                 index -= 1
             else:
                 if culled0 or culled1 or culled2:
-
+                    pass
             #print("new triangle\n")
-
     else:
         if culled:
             return False
