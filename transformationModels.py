@@ -116,11 +116,58 @@ def DrawLine(P0, P1, color):
             if 0 <= x < Cw and 0 <= y < Ch:
                 pixels[x, y] = color
 
+
+def DrawFilledTriangle(P0, P1, P2, color):
+    # Sort points by y-coordinate (ascending)
+    points = sorted([P0, P1, P2], key=lambda p: p[1])
+    x0, y0 = points[0]
+    x1, y1 = points[1]
+    x2, y2 = points[2]
+
+    # Convert to int for safe range use
+    y0, y1, y2 = int(y0), int(y1), int(y2)
+
+    # Interpolate X values along edges
+    x01 = Interpolate(y0, x0, y1, x1)
+    x12 = Interpolate(y1, x1, y2, x2)
+    x02 = Interpolate(y0, x0, y2, x2)
+
+    x012 = x01[:-1] + x12  # avoid duplicating y1 row
+    if len(x012) != (y2 - y0):
+        x012 = x012[:y2 - y0]
+
+    if len(x02) != (y2 - y0):
+        x02 = x02[:y2 - y0]
+
+    # Determine which side is left or right
+    mid = len(x02) // 2
+    if x02[mid] < x012[mid]:
+        x_left = x02
+        x_right = x012
+    else:
+        x_left = x012
+        x_right = x02
+
+    # Draw horizontal lines
+    for y in range(y0, y2):
+        if y - y0 >= len(x_left) or y - y0 >= len(x_right):
+            continue
+        xl = int(x_left[y - y0])
+        xr = int(x_right[y - y0])
+        if xl > xr:
+            xl, xr = xr, xl
+        for x in range(xl, xr):
+            if 0 <= x < Cw and 0 <= y < Ch:
+                pixels[x, y] = color
+
+
+
 # draw a triangle by drawing its 3 edges
 def DrawTriangle(P0, P1, P2, color):
     DrawLine(P0, P1, color)
     DrawLine(P1, P2, color)
     DrawLine(P2, P0, color)
+    #DrawFilledTriangle(P0, P1, P2, color)
 
 # convert 3d point to 2d screen coordinates
 def ProjectVertex(v):
@@ -392,25 +439,19 @@ def render_model(vertices, triangles, model_matrix, view_matrix):
     for plane in planes:
         if not clipped_triangles:
             break
-        try:
-            clipped_triangles = ClipTrianglesAgainstPlane(clipped_triangles, plane, clipped_vertices)
-        except Exception as e:
-            print("error")
-            continue
+        clipped_triangles = ClipTrianglesAgainstPlane(clipped_triangles, plane, clipped_vertices)
+
 
     # draw the triangles that are left
     for tri in clipped_triangles:
-        try:
-            if all(idx < len(clipped_vertices) for idx in tri):
-                # convert 3d points to 2d screen coordinates
-                p0 = ProjectVertex(clipped_vertices[tri[0]])
-                p1 = ProjectVertex(clipped_vertices[tri[1]])
-                p2 = ProjectVertex(clipped_vertices[tri[2]])
-                # draw the triangle
-                DrawTriangle(p0, p1, p2, random.choice(COLORS))
-        except Exception as e:
-            print("error")
-            continue
+        if all(idx < len(clipped_vertices) for idx in tri):
+            # convert 3d points to 2d screen coordinates
+            p0 = ProjectVertex(clipped_vertices[tri[0]])
+            p1 = ProjectVertex(clipped_vertices[tri[1]])
+            p2 = ProjectVertex(clipped_vertices[tri[2]])
+            # draw the triangle
+            DrawTriangle(p0, p1, p2, random.choice(COLORS))
+
 
 # helper function to display a model with transformations
 def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0), cameraRotation=(0,0,0), cameraTranslation=(0,0,0)):
