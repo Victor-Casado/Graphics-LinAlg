@@ -21,8 +21,8 @@ pixels = img.load()
 
 # Useful
 
-def compute_frustum_planes():
-    # Viewport half-dimensions
+
+def compute_planes():
     hw = Vw / 2
     hh = Vh / 2
 
@@ -35,17 +35,15 @@ def compute_frustum_planes():
     origin = (0, 0, 0)
 
     # Planes: all normals should point *inward* (into frustum)
-    near_plane  = (0, 0, -1, 0)  # z = 0
-    far_plane   = (0, 0, 1, -maxDist)
+    near_plane  = (0, 0, 1, -d)  # z >= d (near plane at z=d)
+    far_plane   = (0, 0, -1, maxDist)  # z <= maxDist
 
-    left_plane   = plane_from_points(origin, bottom_left, bottom_right)
-    right_plane  = plane_from_points(origin, top_right, bottom_right)
+    left_plane   = plane_from_points(origin, top_left, bottom_left)
+    right_plane  = plane_from_points(origin, bottom_right, top_right)
     top_plane    = plane_from_points(origin, top_right, top_left)
-    bottom_plane = plane_from_points(origin, top_left, bottom_left)
+    bottom_plane = plane_from_points(origin, bottom_left, bottom_right)
 
     return [near_plane, far_plane, left_plane, right_plane, top_plane, bottom_plane]
-
-
 
 def cross(u, v):
     return [
@@ -130,8 +128,8 @@ def intersect_line_plane(p1, p2, plane):
     d1 = A * x1 + B * y1 + C * z1 + D
     d2 = A * x2 + B * y2 + C * z2 + D
 
-    if d1 == d2:
-        return p1  # Line is parallel and on plane
+    if abs(d1 - d2) < 1e-10:  # Line is parallel to plane
+        return p1
 
     # percent along line computed to get to plane
     t = d1 / (d1 - d2)
@@ -143,6 +141,86 @@ def intersect_line_plane(p1, p2, plane):
     w = w1 + t * dw
 
     return [x, y, z, w]
+
+
+def signed_distance_to_plane(plane, point):
+    A, B, C, D = plane
+    x, y, z, w = point
+    return A*x + B*y + C*z + D
+
+
+def ClipTriangle(triangle, plane, vertices):
+    v0_idx, v1_idx, v2_idx = triangle
+    v0, v1, v2 = vertices[v0_idx], vertices[v1_idx], vertices[v2_idx]
+
+    d0 = signed_distance_to_plane(plane, v0)
+    d1 = signed_distance_to_plane(plane, v1)
+    d2 = signed_distance_to_plane(plane, v2)
+
+    # Use small epsilon for floating point errors
+    eps = 1e-6
+
+    # All vertices are inside
+    if d0 >= -eps and d1 >= -eps and d2 >= -eps:
+        return [triangle]
+
+    # All vertices are outside
+    if d0 < -eps and d1 < -eps and d2 < -eps:
+        return []
+
+    inside = [(d0 >= -eps, 0), (d1 >= -eps, 1), (d2 >= -eps, 2)]
+    inside_verts = [i for is_in, i in inside if is_in]
+    outside_verts = [i for is_in, i in inside if not is_in]
+
+    if len(inside_verts) == 1:
+        inside_idx = triangle[inside_verts[0]]
+        outside_idx1 = triangle[outside_verts[0]]
+        outside_idx2 = triangle[outside_verts[1]]
+
+        inside_v = vertices[inside_idx]
+        outside_v1 = vertices[outside_idx1]
+        outside_v2 = vertices[outside_idx2]
+
+        # Find intersections
+        int1 = intersect_line_plane(inside_v, outside_v1, plane)
+        int2 = intersect_line_plane(inside_v, outside_v2, plane)
+
+        # Add new vertices
+        new_idx1 = len(vertices)
+        new_idx2 = len(vertices) + 1
+        vertices.extend([int1, int2])
+
+        return [[inside_idx, new_idx1, new_idx2]]
+
+    elif len(inside_verts) == 2:
+        inside_idx1 = triangle[inside_verts[0]]
+        inside_idx2 = triangle[inside_verts[1]]
+        outside_idx = triangle[outside_verts[0]]
+
+        inside_v1 = vertices[inside_idx1]
+        inside_v2 = vertices[inside_idx2]
+        outside_v = vertices[outside_idx]
+
+        # Find intersections
+        int1 = intersect_line_plane(outside_v, inside_v1, plane)
+        int2 = intersect_line_plane(outside_v, inside_v2, plane)
+
+        # Add new vertices
+        new_idx1 = len(vertices)
+        new_idx2 = len(vertices) + 1
+        vertices.extend([int1, int2])
+
+        return [[inside_idx1, inside_idx2, new_idx1], [inside_idx2, new_idx2, new_idx1]]
+
+    return []
+
+
+def ClipTrianglesAgainstPlane(triangles, plane, vertices):
+    clipped_triangles = []
+    for triangle in triangles:
+        clipped = ClipTriangle(triangle, plane, vertices)
+        clipped_triangles.extend(clipped)
+    return clipped_triangles
 
 
 # Matrices
@@ -258,77 +336,35 @@ def sphere(radius=1.0, stack_count=8, sector_count=8):
 
 # Render
 
-def render_model(vertices, triangles, model_matrix, view_matrix, center):
-    #print(center)
+def render_model(vertices, triangles, model_matrix, view_matrix):
+    # Transform vertices
     m = matrix_multiply(view_matrix, model_matrix)
-    transformed = [transform_point(m, v) for v in vertices]
+    transformed_vertices = [transform_point(m, v) for v in vertices]
 
-    largestRad = 0
-    for v in transformed:
-        if math.dist(v, center) > largestRad:
-            largestRad = math.dist(v, center)
+    # Create working copies for clipping
+    clipped_triangles = triangles[:]
+    clipped_vertices = transformed_vertices[:]
 
-
-
-            #Culling
     for plane in planes:
-        culled = cull_model(center, largestRad, plane)
-        #print(culled)
-        if culled == "Partially Inside":
-            index = 0
-            #print(triangles)
-            for index in range(len(triangles)):
-                #print(index)
-                if index >= len(triangles):
-                    break
+        if not clipped_triangles:
+            break
+        try:
+            clipped_triangles = ClipTrianglesAgainstPlane(clipped_triangles, plane, clipped_vertices)
+        except Exception as e:
+            print("error")
+            continue
 
-                #print("(" + str(transformed[triangles[index][0]][0]) + "," + str(transformed[triangles[index][0]][1]) + "," + str(transformed[triangles[index][0]][2]) + ")")
-                culled0 = cull_model(transformed[triangles[index][0]], 0)
-
-                #print("(" + str(transformed[triangles[index][1]][0]) + "," + str(transformed[triangles[index][1]][1]) + "," + str(transformed[triangles[index][1]][2]) + ")")
-                culled1 = cull_model(transformed[triangles[index][1]], 0)
-
-                #print("(" + str(transformed[triangles[index][2]][0]) + "," + str(transformed[triangles[index][2]][1]) + "," + str(transformed[triangles[index][2]][2]) + ")")
-                culled2 = cull_model(transformed[triangles[index][2]], 0)
-
-                if culled0 and culled1 and culled2:
-                    #print("outside")
-                    triangles.pop(index)
-                    index -= 1
-                else:
-                    p0i = triangles[index][0]
-                    p1i = triangles[index][1]
-                    p2i = triangles[index][2]
-                    if (culled0 and culled1) and (not culled2):
-                        pass
-                    if (culled0 and culled2) and (not culled1):
-                        pass
-                    if (culled1 and culled2) and (not culled0):
-                        pass
-                    if ((not culled0) and (not culled1)) and culled2:
-                        pass
-                        '''
-                        let A be the vertex with a positive distance
-                        compute B' = Intersection(AB, plane)
-                        compute C' = Intersection(AC, plane)
-                        return [Triangle(A, B', C')]
-                        '''
-                    if ((not culled0) and (not culled2)) and culled1:
-                        pass
-                    if ((not culled1) and (not culled2)) and culled0:
-                        pass
-                    #intersect_line_plane()
-
-            #print("new triangle\n")
-    else:
-        if culled:
-            return False
-
-    for tri in triangles:
-        p0 = ProjectVertex(transformed[tri[0]])
-        p1 = ProjectVertex(transformed[tri[1]])
-        p2 = ProjectVertex(transformed[tri[2]])
-        DrawTriangle(p0, p1, p2, random.choice(COLORS))
+    # Project and draw triangles
+    for tri in clipped_triangles:
+        try:
+            if all(idx < len(clipped_vertices) for idx in tri):
+                p0 = ProjectVertex(clipped_vertices[tri[0]])
+                p1 = ProjectVertex(clipped_vertices[tri[1]])
+                p2 = ProjectVertex(clipped_vertices[tri[2]])
+                DrawTriangle(p0, p1, p2, random.choice(COLORS))
+        except Exception as e:
+            print("error")
+            continue
 
 def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0), cameraRotation=(0,0,0), cameraTranslation=(0,0,0)):
     sx, sy, sz = scale
@@ -360,35 +396,12 @@ def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0)
     view_matrix = matrix_multiply(cT, matrix_multiply(cRz, matrix_multiply(cRy, cRx)))
 
     vertices, triangles = model_fn()
+    render_model(vertices, triangles, model_matrix, view_matrix)
 
-    center = (translation[0] - cameraTranslation[0], translation[1] - cameraTranslation[1], translation[2] - cameraTranslation[2], 1)
-    #print(center)
-    render_model(vertices, triangles, model_matrix, view_matrix, center)
+planes = compute_planes()
 
-# Culling
-
-def signed_distance_to_plane(plane, point):
-    A, B, C, D = plane
-    x, y, z, w = point
-    dist = A*x + B*y + C*z + D
-    if math.isclose(0, dist): #floating point
-        return 0
-    return dist
-
-def cull_model(center, radius, plane):
-    distance = signed_distance_to_plane(plane, center)
-    sign = signed_distance_to_plane(plane, (0,0,1,1))
-    if not abs(distance) < radius:
-        if (sign > 0 and distance < 0) or (sign < 0 and distance > 0):
-            return True
-    else:
-        if radius != 0: #because of reutilization for points
-            return "Partially Inside"
-    return False
 
 # Display
-planes = compute_frustum_planes()
-
 display_model(cube, scale=(1,1,1), rotation=(30, 0, 0), translation=(5, 0, 5))
 display_model(sphere, scale=(0.6,0.6,0.6), translation=(-2, 0, 6))
 display_model(sphere, scale=(0.6,0.6,0.6), translation=(2, 0, 6))
