@@ -114,6 +114,37 @@ def ProjectVertex(v):
     canvasY = int((-y * d / z * Ch / Vh) + Ch / 2)
     return (canvasX, canvasY)
 
+
+def intersect_line_plane(p1, p2, plane):
+    A, B, C, D = plane
+    x1, y1, z1, w1 = p1
+    x2, y2, z2, w2 = p2
+
+    # line
+    dx = x2 - x1
+    dy = y2 - y1
+    dz = z2 - z1
+    dw = w2 - w1
+
+    # Compute the distances
+    d1 = A * x1 + B * y1 + C * z1 + D
+    d2 = A * x2 + B * y2 + C * z2 + D
+
+    if d1 == d2:
+        return p1  # Line is parallel and on plane
+
+    # percent along line computed to get to plane
+    t = d1 / (d1 - d2)
+
+    # move along the line
+    x = x1 + t * dx
+    y = y1 + t * dy
+    z = z1 + t * dz
+    w = w1 + t * dw
+
+    return [x, y, z, w]
+
+
 # Matrices
 
 def identity_matrix():
@@ -240,32 +271,54 @@ def render_model(vertices, triangles, model_matrix, view_matrix, center):
 
 
             #Culling
-    culled = cull_model(center, largestRad)
-    #print(culled)
-    if culled == "Partially Inside":
-        index = 0
-        #print(triangles)
-        for index in range(len(triangles)):
-            #print(index)
-            if index >= len(triangles):
-                break
+    for plane in planes:
+        culled = cull_model(center, largestRad, plane)
+        #print(culled)
+        if culled == "Partially Inside":
+            index = 0
+            #print(triangles)
+            for index in range(len(triangles)):
+                #print(index)
+                if index >= len(triangles):
+                    break
 
-            #print("(" + str(transformed[triangles[index][0]][0]) + "," + str(transformed[triangles[index][0]][1]) + "," + str(transformed[triangles[index][0]][2]) + ")")
-            culled0 = cull_model(transformed[triangles[index][0]], 0)
+                #print("(" + str(transformed[triangles[index][0]][0]) + "," + str(transformed[triangles[index][0]][1]) + "," + str(transformed[triangles[index][0]][2]) + ")")
+                culled0 = cull_model(transformed[triangles[index][0]], 0)
 
-            #print("(" + str(transformed[triangles[index][1]][0]) + "," + str(transformed[triangles[index][1]][1]) + "," + str(transformed[triangles[index][1]][2]) + ")")
-            culled1 = cull_model(transformed[triangles[index][1]], 0)
+                #print("(" + str(transformed[triangles[index][1]][0]) + "," + str(transformed[triangles[index][1]][1]) + "," + str(transformed[triangles[index][1]][2]) + ")")
+                culled1 = cull_model(transformed[triangles[index][1]], 0)
 
-            #print("(" + str(transformed[triangles[index][2]][0]) + "," + str(transformed[triangles[index][2]][1]) + "," + str(transformed[triangles[index][2]][2]) + ")")
-            culled2 = cull_model(transformed[triangles[index][2]], 0)
+                #print("(" + str(transformed[triangles[index][2]][0]) + "," + str(transformed[triangles[index][2]][1]) + "," + str(transformed[triangles[index][2]][2]) + ")")
+                culled2 = cull_model(transformed[triangles[index][2]], 0)
 
-            if culled0 and culled1 and culled2:
-                #print("outside")
-                triangles.pop(index)
-                index -= 1
-            else:
-                if culled0 or culled1 or culled2:
-                    pass
+                if culled0 and culled1 and culled2:
+                    #print("outside")
+                    triangles.pop(index)
+                    index -= 1
+                else:
+                    p0i = triangles[index][0]
+                    p1i = triangles[index][1]
+                    p2i = triangles[index][2]
+                    if (culled0 and culled1) and (not culled2):
+                        pass
+                    if (culled0 and culled2) and (not culled1):
+                        pass
+                    if (culled1 and culled2) and (not culled0):
+                        pass
+                    if ((not culled0) and (not culled1)) and culled2:
+                        pass
+                        '''
+                        let A be the vertex with a positive distance
+                        compute B' = Intersection(AB, plane)
+                        compute C' = Intersection(AC, plane)
+                        return [Triangle(A, B', C')]
+                        '''
+                    if ((not culled0) and (not culled2)) and culled1:
+                        pass
+                    if ((not culled1) and (not culled2)) and culled0:
+                        pass
+                    #intersect_line_plane()
+
             #print("new triangle\n")
     else:
         if culled:
@@ -322,16 +375,15 @@ def signed_distance_to_plane(plane, point):
         return 0
     return dist
 
-def cull_model(center, radius):
-    for plane in planes:
-        distance = signed_distance_to_plane(plane, center)
-        sign = signed_distance_to_plane(plane, (0,0,1,1))
-        if not abs(distance) < radius:
-            if (sign > 0 and distance < 0) or (sign < 0 and distance > 0):
-                return True
-        else:
-            if radius != 0: #because of reutilization for points
-                return "Partially Inside"
+def cull_model(center, radius, plane):
+    distance = signed_distance_to_plane(plane, center)
+    sign = signed_distance_to_plane(plane, (0,0,1,1))
+    if not abs(distance) < radius:
+        if (sign > 0 and distance < 0) or (sign < 0 and distance > 0):
+            return True
+    else:
+        if radius != 0: #because of reutilization for points
+            return "Partially Inside"
     return False
 
 # Display
@@ -341,5 +393,5 @@ display_model(cube, scale=(1,1,1), rotation=(30, 0, 0), translation=(5, 0, 5))
 display_model(sphere, scale=(0.6,0.6,0.6), translation=(-2, 0, 6))
 display_model(sphere, scale=(0.6,0.6,0.6), translation=(2, 0, 6))
 display_model(cube, rotation=(45,60,0), translation = (-2,4,7))
-
+display_model(cube, translation= (0,0,7))
 img.show()
