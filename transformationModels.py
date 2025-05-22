@@ -9,6 +9,7 @@ Vw, Vh = 2.0, 2.0  # Viewport width and height
 d = 1.0            # Distance from camera to projection plane
 maxDist = 1000 # Distance at which stuff is no longer rendered
 minDist = 0
+
 # Colors
 COLORS = [
     (0, 0, 255), (255, 0, 0), (0, 255, 0), (0, 255, 255),
@@ -16,9 +17,12 @@ COLORS = [
     (255, 105, 180), (255, 255, 255), (128, 128, 128), (139, 69, 19)
 ]
 
-# Create a new image
+# Create a new image and depth buffer
 img = Image.new('RGB', (Cw, Ch), color='black')
 pixels = img.load()
+
+# Depth buffer - initialize to 0 (representing 1/infinity)
+depth_buffer = [[0.0 for _ in range(Ch)] for _ in range(Cw)]
 
 # clipping planes define what we can see
 # anything outside these planes gets cut off
@@ -88,88 +92,139 @@ def Interpolate(i0, d0, i1, d1):
         d += a
     return values
 
-# draw a line between two points
-def DrawLine(P0, P1, color):
+# draw a line between two points (with depth testing)
+def DrawLine(P0, P1, z0, z1, color):
     x0, y0 = P0
     x1, y1 = P1
+
+    # Convert Z values to 1/Z for proper interpolation
+    inv_z0 = 1.0 / z0 if z0 != 0 else 0
+    inv_z1 = 1.0 / z1 if z1 != 0 else 0
+
     # pick the direction that changes more to avoid gaps
     if abs(x1 - x0) > abs(y1 - y0):
         # x changes more so we step through x values
         if x0 > x1:
             x0, y0, x1, y1 = x1, y1, x0, y0
-        # get all the y values for each x
+            inv_z0, inv_z1 = inv_z1, inv_z0
+        # get all the y values and 1/z values for each x
         ys = Interpolate(x0, y0, x1, y1)
+        inv_zs = Interpolate(x0, inv_z0, x1, inv_z1)
         for x in range(x0, x1):
+            if x - x0 >= len(ys) or x - x0 >= len(inv_zs):
+                continue
             y = int(ys[x - x0])
+            inv_z = inv_zs[x - x0]
             # make sure we dont draw outside the canvas
             if 0 <= x < Cw and 0 <= y < Ch:
-                pixels[x, y] = color
+                # Depth test: keep pixel if it's closer (higher 1/z value)
+                if inv_z > depth_buffer[x][y]:
+                    depth_buffer[x][y] = inv_z
+                    pixels[x, y] = color
     else:
         # y changes more so we step through y values
         if y0 > y1:
             x0, y0, x1, y1 = x1, y1, x0, y0
-        # get all the x values for each y
+            inv_z0, inv_z1 = inv_z1, inv_z0
+        # get all the x values and 1/z values for each y
         xs = Interpolate(y0, x0, y1, x1)
+        inv_zs = Interpolate(y0, inv_z0, y1, inv_z1)
         for y in range(y0, y1):
+            if y - y0 >= len(xs) or y - y0 >= len(inv_zs):
+                continue
             x = int(xs[y - y0])
+            inv_z = inv_zs[y - y0]
             # make sure we dont draw outside the canvas
             if 0 <= x < Cw and 0 <= y < Ch:
-                pixels[x, y] = color
+                # Depth test: keep pixel if it's closer (higher 1/z value)
+                if inv_z > depth_buffer[x][y]:
+                    depth_buffer[x][y] = inv_z
+                    pixels[x, y] = color
 
-
-def DrawFilledTriangle(P0, P1, P2, color):
-    # Sort points by y-coordinate (ascending)
-    points = sorted([P0, P1, P2], key=lambda p: p[1])
-    x0, y0 = points[0]
-    x1, y1 = points[1]
-    x2, y2 = points[2]
+def DrawFilledTriangle(P0, P1, P2, z0, z1, z2, color):
+    # Sort points by y-coordinate (ascending), keeping z values aligned
+    points_with_z = sorted([(P0, z0), (P1, z1), (P2, z2)], key=lambda item: item[0][1])
+    (x0, y0), z0 = points_with_z[0]
+    (x1, y1), z1 = points_with_z[1]
+    (x2, y2), z2 = points_with_z[2]
 
     # Convert to int for safe range use
     y0, y1, y2 = int(y0), int(y1), int(y2)
 
-    # Interpolate X values along edges
+    # Convert Z values to 1/Z for proper interpolation
+    inv_z0 = 1.0 / z0 if z0 != 0 else 0
+    inv_z1 = 1.0 / z1 if z1 != 0 else 0
+    inv_z2 = 1.0 / z2 if z2 != 0 else 0
+
+    # Interpolate X values and 1/Z values along edges
     x01 = Interpolate(y0, x0, y1, x1)
     x12 = Interpolate(y1, x1, y2, x2)
     x02 = Interpolate(y0, x0, y2, x2)
 
+    inv_z01 = Interpolate(y0, inv_z0, y1, inv_z1)
+    inv_z12 = Interpolate(y1, inv_z1, y2, inv_z2)
+    inv_z02 = Interpolate(y0, inv_z0, y2, inv_z2)
+
     x012 = x01[:-1] + x12  # avoid duplicating y1 row
+    inv_z012 = inv_z01[:-1] + inv_z12
+
     if len(x012) != (y2 - y0):
         x012 = x012[:y2 - y0]
+        inv_z012 = inv_z012[:y2 - y0]
 
     if len(x02) != (y2 - y0):
         x02 = x02[:y2 - y0]
+        inv_z02 = inv_z02[:y2 - y0]
 
     # Determine which side is left or right
     mid = len(x02) // 2
-    if x02[mid] < x012[mid]:
-        x_left = x02
-        x_right = x012
+    if mid < len(x02) and mid < len(x012) and x02[mid] < x012[mid]:
+        x_left, x_right = x02, x012
+        inv_z_left, inv_z_right = inv_z02, inv_z012
     else:
-        x_left = x012
-        x_right = x02
+        x_left, x_right = x012, x02
+        inv_z_left, inv_z_right = inv_z012, inv_z02
 
-    # Draw horizontal lines
+    # Draw horizontal lines with depth testing
     for y in range(y0, y2):
-        if y - y0 >= len(x_left) or y - y0 >= len(x_right):
+        y_idx = y - y0
+        if y_idx >= len(x_left) or y_idx >= len(x_right):
             continue
-        xl = int(x_left[y - y0])
-        xr = int(x_right[y - y0])
+        xl = int(x_left[y_idx])
+        xr = int(x_right[y_idx])
+        inv_z_l = inv_z_left[y_idx]
+        inv_z_r = inv_z_right[y_idx]
+
         if xl > xr:
             xl, xr = xr, xl
+            inv_z_l, inv_z_r = inv_z_r, inv_z_l
+
+        # Interpolate 1/Z across the horizontal line
+        if xl != xr:
+            inv_zs = Interpolate(xl, inv_z_l, xr, inv_z_r)
+        else:
+            inv_zs = [inv_z_l]
+
         for x in range(xl, xr):
+            x_idx = x - xl
+            if x_idx >= len(inv_zs):
+                continue
+            inv_z = inv_zs[x_idx]
             if 0 <= x < Cw and 0 <= y < Ch:
-                pixels[x, y] = color
-
-
+                # Depth test: keep pixel if it's closer (higher 1/z value)
+                if inv_z > depth_buffer[x][y]:
+                    depth_buffer[x][y] = inv_z
+                    pixels[x, y] = color
 
 # draw a triangle by drawing its 3 edges
-def DrawTriangle(P0, P1, P2, color):
-    DrawLine(P0, P1, color)
-    DrawLine(P1, P2, color)
-    DrawLine(P2, P0, color)
-    #DrawFilledTriangle(P0, P1, P2, color)
+def DrawTriangle(P0, P1, P2, z0, z1, z2, color):
+    DrawLine(P0, P1, z0, z1, color)
+    DrawLine(P1, P2, z1, z2, color)
+    DrawLine(P2, P0, z2, z0, color)
+    # Uncomment the next line to draw filled triangles instead
+    DrawFilledTriangle(P0, P1, P2, z0, z1, z2, color)
 
-# convert 3d point to 2d screen coordinates
+# convert 3d point to 2d screen coordinates and return z value
 def ProjectVertex(v):
     x, y, z, w = v
     # convert from 4d to 3d coordinates
@@ -180,7 +235,7 @@ def ProjectVertex(v):
     # divide by z to make distant things smaller
     canvasX = int((x * d / z * Cw / Vw) + Cw / 2)
     canvasY = int((-y * d / z * Ch / Vh) + Ch / 2)  # flip y axis
-    return (canvasX, canvasY)
+    return (canvasX, canvasY, z)  # return z value for depth testing
 
 # find where a line crosses a plane
 def intersect_line_plane(p1, p2, plane):
@@ -441,17 +496,17 @@ def render_model(vertices, triangles, model_matrix, view_matrix):
             break
         clipped_triangles = ClipTrianglesAgainstPlane(clipped_triangles, plane, clipped_vertices)
 
-
     # draw the triangles that are left
     for tri in clipped_triangles:
         if all(idx < len(clipped_vertices) for idx in tri):
-            # convert 3d points to 2d screen coordinates
-            p0 = ProjectVertex(clipped_vertices[tri[0]])
-            p1 = ProjectVertex(clipped_vertices[tri[1]])
-            p2 = ProjectVertex(clipped_vertices[tri[2]])
-            # draw the triangle
-            DrawTriangle(p0, p1, p2, random.choice(COLORS))
+            # convert 3d points to 2d screen coordinates and get z values
+            projected = [ProjectVertex(clipped_vertices[idx]) for idx in tri]
+            p0, z0 = (projected[0][0], projected[0][1]), projected[0][2]
+            p1, z1 = (projected[1][0], projected[1][1]), projected[1][2]
+            p2, z2 = (projected[2][0], projected[2][1]), projected[2][2]
 
+            # draw the triangle with depth information
+            DrawTriangle(p0, p1, p2, z0, z1, z2, random.choice(COLORS))
 
 # helper function to display a model with transformations
 def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0), cameraRotation=(0,0,0), cameraTranslation=(0,0,0)):
@@ -492,13 +547,22 @@ def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0)
     vertices, triangles = model_fn()
     render_model(vertices, triangles, model_matrix, view_matrix)
 
+# Function to clear the depth buffer for new frames
+def clear_depth_buffer():
+    global depth_buffer
+    depth_buffer = [[0.0 for _ in range(Ch)] for _ in range(Cw)]
+
 # set up the clipping planes
 planes = compute_planes()
+
+# Clear depth buffer before rendering
+clear_depth_buffer()
 
 # render some objects
 display_model(cube, scale=(1,1,1), rotation=(30, 0, 0), translation=(5, 0, 5))
 display_model(sphere, scale=(0.6,0.6,0.6), translation=(-2, 0, 6))
 display_model(sphere, scale=(0.6,0.6,0.6), translation=(2, 0, 6))
 display_model(sphere, scale=(2,2,2), translation = (0,3,10))
-display_model(cube, translation= (0,0,7))
+display_model(cube, rotation=(45, 0, 0), translation= (0,0,7))
+
 img.show()
