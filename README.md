@@ -1,0 +1,1 @@
+This repository contains a basic implementation of a rasterizer written in Python, inspired by a graphics textbook guide. It pairs with a companion slidedeck titled **“How to Win Friends and Influence Pixels,”** which provides an intuitive explanation of the rasterization process.
