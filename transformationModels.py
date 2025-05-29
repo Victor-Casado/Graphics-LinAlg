@@ -14,8 +14,19 @@ minDist = 0
 COLORS = [
     (0, 0, 255), (255, 0, 0), (0, 255, 0), (0, 255, 255),
     (255, 0, 255), (255, 255, 0), (255, 165, 0), (128, 0, 128),
-    (255, 105, 180), (255, 255, 255), (128, 128, 128), (139, 69, 19)
+    (255, 105, 180), (128, 128, 128), (139, 69, 19)
 ]
+
+# Lighting parameters
+LIGHT_POS = [5, 5, 5]  # position of light source
+LIGHT_COLOR = [1.0, 1.0, 1.0]  # white light
+AMBIENT_STRENGTH = 0.2
+DIFFUSE_STRENGTH = 0.8
+SPECULAR_STRENGTH = 0.5
+SHININESS = 32
+
+# Camera position (for specular calculations)
+CAMERA_POS = [0, 0, 0]
 
 # Create a new image and depth buffer
 img = Image.new('RGB', (Cw, Ch), color='black')
@@ -63,7 +74,72 @@ def cross(u, v):
 # make a vector have length 1
 def normalize(v):
     mag = sum(c**2 for c in v) ** 0.5
+    if mag == 0:
+        return [0, 0, 0]
     return [c / mag for c in v]
+
+# vector subtraction
+def subtract_vectors(v1, v2):
+    return [v1[i] - v2[i] for i in range(3)]
+
+# vector addition
+def add_vectors(v1, v2):
+    return [v1[i] + v2[i] for i in range(3)]
+
+# dot product
+def dot_product(v1, v2):
+    return sum(v1[i] * v2[i] for i in range(3))
+
+# reflect vector around normal
+def reflect_vector(v, n):
+    dot_vn = dot_product(v, n)
+    return [v[i] - 2 * dot_vn * n[i] for i in range(3)]
+
+# calculate normal vector for a triangle
+def calculate_triangle_normal(v0, v1, v2):
+    # convert from homogeneous coordinates
+    p0 = [v0[0]/v0[3], v0[1]/v0[3], v0[2]/v0[3]]
+    p1 = [v1[0]/v1[3], v1[1]/v1[3], v1[2]/v1[3]]
+    p2 = [v2[0]/v2[3], v2[1]/v2[3], v2[2]/v2[3]]
+
+    # two edges of the triangle
+    edge1 = subtract_vectors(p1, p0)
+    edge2 = subtract_vectors(p2, p0)
+
+    # cross product gives normal
+    normal = cross(edge1, edge2)
+    return normalize(normal)
+
+# compute phong shading for a point
+def compute_phong_shading(point, normal, base_color):
+    # convert point from homogeneous coordinates
+    world_pos = [point[0]/point[3], point[1]/point[3], point[2]/point[3]]
+
+    # vector from point to light
+    light_dir = normalize(subtract_vectors(LIGHT_POS, world_pos))
+
+    # vector from point to camera
+    view_dir = normalize(subtract_vectors(CAMERA_POS, world_pos))
+
+    # ambient component
+    ambient = [AMBIENT_STRENGTH * base_color[i] / 255.0 for i in range(3)]
+
+    # diffuse component
+    diff = max(0, dot_product(normal, light_dir))
+    diffuse = [DIFFUSE_STRENGTH * diff * LIGHT_COLOR[i] * base_color[i] / 255.0 for i in range(3)]
+
+    # specular component
+    reflect_dir = reflect_vector([-light_dir[i] for i in range(3)], normal)
+    spec = max(0, dot_product(view_dir, reflect_dir)) ** SHININESS
+    specular = [SPECULAR_STRENGTH * spec * LIGHT_COLOR[i] for i in range(3)]
+
+    # combine all components
+    final_color = [
+        min(255, int(255 * (ambient[i] + diffuse[i] + specular[i])))
+        for i in range(3)
+    ]
+
+    return tuple(final_color)
 
 # make a plane equation from 3 points
 def plane_from_points(p1, p2, p3):
@@ -92,8 +168,22 @@ def Interpolate(i0, d0, i1, d1):
         d += a
     return values
 
-# draw a line between two points (with depth testing)
-def DrawLine(P0, P1, z0, z1, color):
+# interpolate colors component-wise
+def InterpolateColor(i0, c0, i1, c1):
+    if i0 == i1:
+        return [c0]
+    colors = []
+    # interpolate each color component separately
+    r_vals = Interpolate(i0, c0[0], i1, c1[0])
+    g_vals = Interpolate(i0, c0[1], i1, c1[1])
+    b_vals = Interpolate(i0, c0[2], i1, c1[2])
+
+    for i in range(len(r_vals)):
+        colors.append((int(r_vals[i]), int(g_vals[i]), int(b_vals[i])))
+    return colors
+
+# draw a line between two points (with depth testing and color interpolation)
+def DrawLine(P0, P1, z0, z1, color0, color1):
     x0, y0 = P0
     x1, y1 = P1
 
@@ -107,14 +197,17 @@ def DrawLine(P0, P1, z0, z1, color):
         if x0 > x1:
             x0, y0, x1, y1 = x1, y1, x0, y0
             inv_z0, inv_z1 = inv_z1, inv_z0
-        # get all the y values and 1/z values for each x
+            color0, color1 = color1, color0
+        # get all the y values, 1/z values, and colors for each x
         ys = Interpolate(x0, y0, x1, y1)
         inv_zs = Interpolate(x0, inv_z0, x1, inv_z1)
+        colors = InterpolateColor(x0, color0, x1, color1)
         for x in range(x0, x1):
-            if x - x0 >= len(ys) or x - x0 >= len(inv_zs):
+            if x - x0 >= len(ys) or x - x0 >= len(inv_zs) or x - x0 >= len(colors):
                 continue
             y = int(ys[x - x0])
             inv_z = inv_zs[x - x0]
+            color = colors[x - x0]
             # make sure we dont draw outside the canvas
             if 0 <= x < Cw and 0 <= y < Ch:
                 # Depth test: keep pixel if it's closer (higher 1/z value)
@@ -126,14 +219,17 @@ def DrawLine(P0, P1, z0, z1, color):
         if y0 > y1:
             x0, y0, x1, y1 = x1, y1, x0, y0
             inv_z0, inv_z1 = inv_z1, inv_z0
-        # get all the x values and 1/z values for each y
+            color0, color1 = color1, color0
+        # get all the x values, 1/z values, and colors for each y
         xs = Interpolate(y0, x0, y1, x1)
         inv_zs = Interpolate(y0, inv_z0, y1, inv_z1)
+        colors = InterpolateColor(y0, color0, y1, color1)
         for y in range(y0, y1):
-            if y - y0 >= len(xs) or y - y0 >= len(inv_zs):
+            if y - y0 >= len(xs) or y - y0 >= len(inv_zs) or y - y0 >= len(colors):
                 continue
             x = int(xs[y - y0])
             inv_z = inv_zs[y - y0]
+            color = colors[y - y0]
             # make sure we dont draw outside the canvas
             if 0 <= x < Cw and 0 <= y < Ch:
                 # Depth test: keep pixel if it's closer (higher 1/z value)
@@ -141,12 +237,12 @@ def DrawLine(P0, P1, z0, z1, color):
                     depth_buffer[x][y] = inv_z
                     pixels[x, y] = color
 
-def DrawFilledTriangle(P0, P1, P2, z0, z1, z2, color):
-    # Sort points by y-coordinate (ascending), keeping z values aligned
-    points_with_z = sorted([(P0, z0), (P1, z1), (P2, z2)], key=lambda item: item[0][1])
-    (x0, y0), z0 = points_with_z[0]
-    (x1, y1), z1 = points_with_z[1]
-    (x2, y2), z2 = points_with_z[2]
+def DrawFilledTriangle(P0, P1, P2, z0, z1, z2, color0, color1, color2):
+    # Sort points by y-coordinate (ascending), keeping z values and colors aligned
+    points_with_data = sorted([(P0, z0, color0), (P1, z1, color1), (P2, z2, color2)], key=lambda item: item[0][1])
+    (x0, y0), z0, color0 = points_with_data[0]
+    (x1, y1), z1, color1 = points_with_data[1]
+    (x2, y2), z2, color2 = points_with_data[2]
 
     # Convert to int for safe range use
     y0, y1, y2 = int(y0), int(y1), int(y2)
@@ -156,7 +252,7 @@ def DrawFilledTriangle(P0, P1, P2, z0, z1, z2, color):
     inv_z1 = 1.0 / z1 if z1 != 0 else 0
     inv_z2 = 1.0 / z2 if z2 != 0 else 0
 
-    # Interpolate X values and 1/Z values along edges
+    # Interpolate X values, 1/Z values, and colors along edges
     x01 = Interpolate(y0, x0, y1, x1)
     x12 = Interpolate(y1, x1, y2, x2)
     x02 = Interpolate(y0, x0, y2, x2)
@@ -165,64 +261,81 @@ def DrawFilledTriangle(P0, P1, P2, z0, z1, z2, color):
     inv_z12 = Interpolate(y1, inv_z1, y2, inv_z2)
     inv_z02 = Interpolate(y0, inv_z0, y2, inv_z2)
 
+    color01 = InterpolateColor(y0, color0, y1, color1)
+    color12 = InterpolateColor(y1, color1, y2, color2)
+    color02 = InterpolateColor(y0, color0, y2, color2)
+
     x012 = x01[:-1] + x12  # avoid duplicating y1 row
     inv_z012 = inv_z01[:-1] + inv_z12
+    color012 = color01[:-1] + color12
 
     if len(x012) != (y2 - y0):
         x012 = x012[:y2 - y0]
         inv_z012 = inv_z012[:y2 - y0]
+        color012 = color012[:y2 - y0]
 
     if len(x02) != (y2 - y0):
         x02 = x02[:y2 - y0]
         inv_z02 = inv_z02[:y2 - y0]
+        color02 = color02[:y2 - y0]
 
     # Determine which side is left or right
     mid = len(x02) // 2
     if mid < len(x02) and mid < len(x012) and x02[mid] < x012[mid]:
         x_left, x_right = x02, x012
         inv_z_left, inv_z_right = inv_z02, inv_z012
+        color_left, color_right = color02, color012
     else:
         x_left, x_right = x012, x02
         inv_z_left, inv_z_right = inv_z012, inv_z02
+        color_left, color_right = color012, color02
 
-    # Draw horizontal lines with depth testing
+    # Draw horizontal lines with depth testing and color interpolation
     for y in range(y0, y2):
         y_idx = y - y0
-        if y_idx >= len(x_left) or y_idx >= len(x_right):
+        if y_idx >= len(x_left) or y_idx >= len(x_right) or y_idx >= len(color_left) or y_idx >= len(color_right):
             continue
         xl = int(x_left[y_idx])
         xr = int(x_right[y_idx])
         inv_z_l = inv_z_left[y_idx]
         inv_z_r = inv_z_right[y_idx]
+        color_l = color_left[y_idx]
+        color_r = color_right[y_idx]
 
         if xl > xr:
             xl, xr = xr, xl
             inv_z_l, inv_z_r = inv_z_r, inv_z_l
+            color_l, color_r = color_r, color_l
 
-        # Interpolate 1/Z across the horizontal line
+        # Interpolate 1/Z and color across the horizontal line
         if xl != xr:
             inv_zs = Interpolate(xl, inv_z_l, xr, inv_z_r)
+            colors = InterpolateColor(xl, color_l, xr, color_r)
         else:
             inv_zs = [inv_z_l]
+            colors = [color_l]
 
         for x in range(xl, xr):
             x_idx = x - xl
-            if x_idx >= len(inv_zs):
+            if x_idx >= len(inv_zs) or x_idx >= len(colors):
                 continue
             inv_z = inv_zs[x_idx]
+            color = colors[x_idx]
             if 0 <= x < Cw and 0 <= y < Ch:
                 # Depth test: keep pixel if it's closer (higher 1/z value)
                 if inv_z > depth_buffer[x][y]:
                     depth_buffer[x][y] = inv_z
                     pixels[x, y] = color
 
-# draw a triangle by drawing its 3 edges
-def DrawTriangle(P0, P1, P2, z0, z1, z2, color):
-    DrawLine(P0, P1, z0, z1, color)
-    DrawLine(P1, P2, z1, z2, color)
-    DrawLine(P2, P0, z2, z0, color)
-    # Uncomment the next line to draw filled triangles instead
-    DrawFilledTriangle(P0, P1, P2, z0, z1, z2, color)
+# draw a triangle by drawing its 3 edges or filled
+def DrawTriangle(P0, P1, P2, z0, z1, z2, color0, color1, color2):
+    # Uncomment next 3 lines to draw wireframe
+     DrawLine(P0, P1, z0, z1, color0, color1)
+     DrawLine(P1, P2, z1, z2, color1, color2)
+     DrawLine(P2, P0, z2, z0, color2, color0)
+
+    # Draw filled triangle with phong shading
+     DrawFilledTriangle(P0, P1, P2, z0, z1, z2, color0, color1, color2)
 
 # convert 3d point to 2d screen coordinates and return z value
 def ProjectVertex(v):
@@ -481,7 +594,7 @@ def sphere(radius=1.0, stack_count=8, sector_count=8):
     return vertices, triangles
 
 # main rendering function
-def render_model(vertices, triangles, model_matrix, view_matrix):
+def render_model(vertices, triangles, model_matrix, view_matrix, base_color):
     # transform all vertices
     m = matrix_multiply(view_matrix, model_matrix)
     transformed_vertices = [transform_point(m, v) for v in vertices]
@@ -499,17 +612,28 @@ def render_model(vertices, triangles, model_matrix, view_matrix):
     # draw the triangles that are left
     for tri in clipped_triangles:
         if all(idx < len(clipped_vertices) for idx in tri):
+            # get the 3 vertices
+            v0, v1, v2 = clipped_vertices[tri[0]], clipped_vertices[tri[1]], clipped_vertices[tri[2]]
+
+            # calculate triangle normal for lighting
+            normal = calculate_triangle_normal(v0, v1, v2)
+
+            # compute phong shading for each vertex
+            color0 = compute_phong_shading(v0, normal, base_color)
+            color1 = compute_phong_shading(v1, normal, base_color)
+            color2 = compute_phong_shading(v2, normal, base_color)
+
             # convert 3d points to 2d screen coordinates and get z values
             projected = [ProjectVertex(clipped_vertices[idx]) for idx in tri]
             p0, z0 = (projected[0][0], projected[0][1]), projected[0][2]
             p1, z1 = (projected[1][0], projected[1][1]), projected[1][2]
             p2, z2 = (projected[2][0], projected[2][1]), projected[2][2]
 
-            # draw the triangle with depth information
-            DrawTriangle(p0, p1, p2, z0, z1, z2, random.choice(COLORS))
+            # draw the triangle with per-vertex colors
+            DrawTriangle(p0, p1, p2, z0, z1, z2, color0, color1, color2)
 
 # helper function to display a model with transformations
-def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0), cameraRotation=(0,0,0), cameraTranslation=(0,0,0)):
+def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0), cameraRotation=(0,0,0), cameraTranslation=(0,0,0), color=None):
     # get scale rotate translate values
     sx, sy, sz = scale
     rx, ry, rz = rotation
@@ -545,7 +669,12 @@ def display_model(model_fn, scale=(1,1,1), rotation=(0,0,0), translation=(0,0,0)
 
     # get the model and render it
     vertices, triangles = model_fn()
-    render_model(vertices, triangles, model_matrix, view_matrix)
+
+    # use provided color or pick a random one
+    if color is None:
+        color = random.choice(COLORS)
+
+    render_model(vertices, triangles, model_matrix, view_matrix, color)
 
 # Function to clear the depth buffer for new frames
 def clear_depth_buffer():
@@ -558,11 +687,11 @@ planes = compute_planes()
 # Clear depth buffer before rendering
 clear_depth_buffer()
 
-# render some objects
-display_model(cube, scale=(1,1,1), rotation=(30, 0, 0), translation=(5, 0, 5))
-display_model(sphere, scale=(0.6,0.6,0.6), translation=(-2, 0, 6))
-display_model(sphere, scale=(0.6,0.6,0.6), translation=(2, 0, 6))
-display_model(sphere, scale=(2,2,2), translation = (0,3,10))
-display_model(cube, rotation=(45, 0, 0), translation= (0,0,7))
+# render some objects with phong shading
+display_model(cube, rotation=(20, 40, 60), scale=(1,1,1), translation=(1, 0, 4), color=(255, 0, 0))
+display_model(sphere, scale=(0.6,0.6,0.6), translation=(-2, 0, 6), color=(0, 255, 0))
+display_model(sphere, scale=(0.6,0.6,0.6), translation=(5, 0, 6), color=(0, 0, 255))
+display_model(sphere, scale=(2,2,2), translation=(0,3,10), color=(255, 255, 0))
+display_model(cube, rotation=(50, 0, 0), translation=(-2,0,7), color=(255, 0, 255))
 
 img.show()
